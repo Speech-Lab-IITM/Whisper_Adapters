@@ -2,11 +2,14 @@ import copy
 from typing import Optional, Tuple, Union
 
 import torch
+from torch import nn
 import torch.nn.functional as F
 from typeguard import check_argument_types
 
 from espnet2.asr.encoder.abs_encoder import AbsEncoder
 from espnet2.asr.specaug.specaug import SpecAug
+from espnet.nets.pytorch_backend.transformer.layer_norm import LayerNorm
+
 
 
 class OpenAIWhisperEncoder(AbsEncoder):
@@ -24,6 +27,9 @@ class OpenAIWhisperEncoder(AbsEncoder):
         use_specaug: bool = False,
         specaug_conf: Union[dict, None] = None,
         do_pad_trim: bool = False,
+        EncAdaptList=[0,0,0,0,0,0,0,0,0,0,0,0],
+        adapter_size=128,
+        Adapt_inputSize=768,
     ):
         try:
             import whisper
@@ -43,7 +49,11 @@ class OpenAIWhisperEncoder(AbsEncoder):
         self.win_length = N_FFT
         self.hop_length = HOP_LENGTH
         self.n_mels = N_MELS
-
+        self.downL1 = nn.Linear(Adapt_inputSize,adapter_size)
+        self.upL2 = nn.Linear(adapter_size,Adapt_inputSize)
+        self.nonlinearity = nn.ReLU()
+        self.norm_ff = LayerNorm(Adapt_inputSize)
+        self.EncAdaptList = EncAdaptList
         self.mel_filters = whisper.audio.mel_filters
 
         # note that originally Whisper doesn't use dropouts
@@ -142,6 +152,15 @@ class OpenAIWhisperEncoder(AbsEncoder):
 
         for layer, block in enumerate(self.encoders.blocks):
             x = block(x)
+        # Adapter module
+            if(self.EncAdaptList[layer]):
+                residual2 = x
+                x = self.norm_ff(x)
+                x = self.downL1(x)
+                x = self.nonlinearity(x)
+                x_adapt = self.upL2(x)
+                x = residual2 + x_adapt 
+
             if layer < len(self.encoders.blocks) - 1:
                 x = self.dropout(x)
 

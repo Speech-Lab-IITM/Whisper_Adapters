@@ -2,11 +2,12 @@ import copy
 from typing import Any, List, Tuple
 
 import torch
+from torch import nn
 from typeguard import check_argument_types
 
 from espnet2.asr.decoder.abs_decoder import AbsDecoder
 from espnet.nets.scorer_interface import BatchScorerInterface
-
+from espnet.nets.pytorch_backend.transformer.layer_norm import LayerNorm
 
 class OpenAIWhisperDecoder(AbsDecoder, BatchScorerInterface):
     """Transformer-based Speech-to-Text Decoder from OpenAI's Whisper Model:
@@ -21,6 +22,9 @@ class OpenAIWhisperDecoder(AbsDecoder, BatchScorerInterface):
         dropout_rate: float = 0.0,
         whisper_model: str = "small",
         download_dir: str = None,
+        DecAdaptList=[0,0,0,0,0,0,0,0,0,0,0,0],
+        adapter_size=128,
+        Adapt_inputSize=768,
     ):
         try:
             import whisper
@@ -35,6 +39,11 @@ class OpenAIWhisperDecoder(AbsDecoder, BatchScorerInterface):
         assert check_argument_types()
         super().__init__()
 
+        self.downL1 = nn.Linear(Adapt_inputSize,adapter_size)
+        self.upL2 = nn.Linear(adapter_size,Adapt_inputSize)
+        self.nonlinearity = nn.ReLU()
+        self.norm_ff = LayerNorm(Adapt_inputSize)
+        self.DecAdaptList = DecAdaptList
         assert whisper_model in whisper.available_models()
         _model = whisper.load_model(whisper_model, download_root=download_dir)
         self.decoders = copy.deepcopy(_model.decoder)
@@ -97,6 +106,17 @@ class OpenAIWhisperDecoder(AbsDecoder, BatchScorerInterface):
 
         for layer, block in enumerate(self.decoders.blocks):
             x = block(x, memory, mask=self.decoders.mask)
+            print(layer,"-----layer------")
+        # Adapter module
+            if(self.DecAdaptList[layer]):
+                print("--------entered----------")
+                residual2 = x
+                x = self.norm_ff(x)
+                x = self.downL1(x)
+                x = self.nonlinearity(x)
+                x_adapt = self.upL2(x)
+                x = residual2 + x_adapt 
+
             if layer < len(self.decoders.blocks) - 1:
                 x = self.dropout(x)
 
@@ -139,6 +159,16 @@ class OpenAIWhisperDecoder(AbsDecoder, BatchScorerInterface):
 
         for layer, block in enumerate(self.decoders.blocks):
             x = block(x, memory, mask=self.decoders.mask)
+
+        # Adapter module
+            if(self.DecAdaptList[layer]):
+                residual2 = x
+                x = self.norm_ff(x)
+                x = self.downL1(x)
+                x = self.nonlinearity(x)
+                x_adapt = self.upL2(x)
+                x = residual2 + x_adapt 
+
             if layer < len(self.decoders.blocks) - 1:
                 x = self.dropout(x)
 

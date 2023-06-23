@@ -366,6 +366,11 @@ class ASRTask(AbsTask):
             default="13_15",
             help="The range of noise decibel level.",
         )
+        parser.add_argument("--EncAdaptList", nargs="+",type=int, default=[0,0,0,0,0,0,0,0,0,0,0,0])
+        parser.add_argument("--DecAdaptList", nargs="+",type=int, default=[0,0,0,0,0,0,0,0,0,0,0,0])
+        parser.add_argument("--adapter_size",type=int,default=128)
+        parser.add_argument("--Adapt_inputSize",type=int,default=768)
+        
         group.add_argument(
             "--short_noise_thres",
             type=float,
@@ -537,7 +542,7 @@ class ASRTask(AbsTask):
 
         # 4. Encoder
         encoder_class = encoder_choices.get_class(args.encoder)
-        encoder = encoder_class(input_size=input_size, **args.encoder_conf)
+        encoder = encoder_class(input_size=input_size,EncAdaptList=args.EncAdaptList,adapter_size=args.adapter_size,Adapt_inputSize=args.Adapt_inputSize, **args.encoder_conf)
 
         # 5. Post-encoder block
         # NOTE(kan-bayashi): Use getattr to keep the compatibility
@@ -572,6 +577,9 @@ class ASRTask(AbsTask):
                 decoder = decoder_class(
                     vocab_size=vocab_size,
                     encoder_output_size=encoder_output_size,
+                    DecAdaptList=args.DecAdaptList,
+                    adapter_size=args.adapter_size,
+                    Adapt_inputSize=args.Adapt_inputSize,
                     **args.decoder_conf,
                 )
                 joint_network = None
