@@ -39,19 +39,35 @@ class OpenAIWhisperDecoder(AbsDecoder, BatchScorerInterface):
         assert check_argument_types()
         super().__init__()
 
-        self.downL1 = nn.Linear(Adapt_inputSize,adapter_size)
-        self.upL2 = nn.Linear(adapter_size,Adapt_inputSize)
-        self.nonlinearity = nn.ReLU()
-        self.norm_ff = LayerNorm(Adapt_inputSize)
         self.DecAdaptList = DecAdaptList
         assert whisper_model in whisper.available_models()
         _model = whisper.load_model(whisper_model, download_root=download_dir)
         self.decoders = copy.deepcopy(_model.decoder)
         attention_dim = self.decoders.token_embedding.embedding_dim
 
+        device = torch.device('cpu')
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+
+        self.adapter_dict = {}
+        self.adapter_list =nn.ModuleList()
+        adapter_module = 0
+        idx_list =[]
+        for idx,val in enumerate(DecAdaptList):
+            if(val):
+                self.adapter_dict.update({idx:adapter_module})
+        
+        for layer in self.adapter_dict.keys():
+            self.adapter_list += [nn.Sequential(
+                            LayerNorm(Adapt_inputSize),
+                            nn.Linear(Adapt_inputSize,adapter_size),
+                            nn.ReLU(),
+                            nn.Linear(adapter_size,Adapt_inputSize)
+                            ).to(device)]
+
+
         # note that originally Whisper doesn't use dropouts
         self.dropout = torch.nn.Dropout(dropout_rate)
-
         # vocab size mismatch -> reinitialize embedding
         # orig vocab size (multilingual): 51865
         # orig vocab size (english): 51864
@@ -106,16 +122,11 @@ class OpenAIWhisperDecoder(AbsDecoder, BatchScorerInterface):
 
         for layer, block in enumerate(self.decoders.blocks):
             x = block(x, memory, mask=self.decoders.mask)
-            print(layer,"-----layer------")
         # Adapter module
             if(self.DecAdaptList[layer]):
-                print("--------entered----------")
-                residual2 = x
-                x = self.norm_ff(x)
-                x = self.downL1(x)
-                x = self.nonlinearity(x)
-                x_adapt = self.upL2(x)
-                x = residual2 + x_adapt 
+                adapter_idx = self.adapter_dict[layer]
+                x_adapt = self.adapter_list[adapter_idx](x)
+                x = x + x_adapt 
 
             if layer < len(self.decoders.blocks) - 1:
                 x = self.dropout(x)
@@ -162,12 +173,9 @@ class OpenAIWhisperDecoder(AbsDecoder, BatchScorerInterface):
 
         # Adapter module
             if(self.DecAdaptList[layer]):
-                residual2 = x
-                x = self.norm_ff(x)
-                x = self.downL1(x)
-                x = self.nonlinearity(x)
-                x_adapt = self.upL2(x)
-                x = residual2 + x_adapt 
+                adapter_idx = self.adapter_dict[layer]
+                x_adapt = self.adapter_list[adapter_idx](x)
+                x = x + x_adapt 
 
             if layer < len(self.decoders.blocks) - 1:
                 x = self.dropout(x)

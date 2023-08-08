@@ -45,17 +45,33 @@ class OpenAIWhisperEncoder(AbsEncoder):
         assert check_argument_types()
         super().__init__()
 
+        device = torch.device('cpu')
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+
         self.n_fft = N_FFT
         self.win_length = N_FFT
         self.hop_length = HOP_LENGTH
         self.n_mels = N_MELS
-        self.downL1 = nn.Linear(Adapt_inputSize,adapter_size)
-        self.upL2 = nn.Linear(adapter_size,Adapt_inputSize)
-        self.nonlinearity = nn.ReLU()
-        self.norm_ff = LayerNorm(Adapt_inputSize)
         self.EncAdaptList = EncAdaptList
         self.mel_filters = whisper.audio.mel_filters
 
+        self.adapter_dict = {}
+        self.adapter_list =nn.ModuleList()
+        adapter_module = 0
+        idx_list =[]
+        for idx,val in enumerate(EncAdaptList):
+            if(val):
+                self.adapter_dict.update({idx:adapter_module})
+        
+        for layer in self.adapter_dict.keys():
+            self.adapter_list += [nn.Sequential(
+                            LayerNorm(Adapt_inputSize),
+                            nn.Linear(Adapt_inputSize,adapter_size),
+                            nn.ReLU(),
+                            nn.Linear(adapter_size,Adapt_inputSize)
+                            ).to(device)]
+        
         # note that originally Whisper doesn't use dropouts
         self.dropout = torch.nn.Dropout(dropout_rate)
 
@@ -154,12 +170,9 @@ class OpenAIWhisperEncoder(AbsEncoder):
             x = block(x)
         # Adapter module
             if(self.EncAdaptList[layer]):
-                residual2 = x
-                x = self.norm_ff(x)
-                x = self.downL1(x)
-                x = self.nonlinearity(x)
-                x_adapt = self.upL2(x)
-                x = residual2 + x_adapt 
+                adapter_idx = self.adapter_dict[layer]
+                x_adapt = self.adapter_list[adapter_idx](x)
+                x = x + x_adapt 
 
             if layer < len(self.encoders.blocks) - 1:
                 x = self.dropout(x)
